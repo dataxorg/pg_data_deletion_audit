@@ -1,0 +1,89 @@
+WHO/WHEN DELETED MY DATA FROM TABLE...???
+Tell me the IP , username and event time...???
+#PostgreSQL
+
+
+
+Data deletion is a critical aspect of data management as it helps in maintaining the privacy and security of sensitive information. In order to ensure that the deletion process is carried out effectively and efficiently, it is crucial to have an audit mechanism in place. This post provides a comprehensive guide to setting up an audit system for data deletion from table , covering all the necessary steps and considerations.
+
+--#Create a table and indexes to store logs.
+
+create table action_history (
+  schema_name text not null,
+  table_name text not null,
+  user_name text,
+  action_tstamp timestamp with time zone not null default current_timestamp,
+  action TEXT NOT NULL check (action in ('I','D','U','T')),
+  original_data text,
+  new_data text,
+  query text,
+  client_ip text
+);
+
+
+
+create index ah_schema_table_idx on action_history(((schema_name||'.'||table_name)::TEXT));
+create index ah_action_tstamp_idx on action_history(action_tstamp);
+create index ah_action_idx on action_history(action);
+
+--#Create trigger function 
+
+CREATE OR REPLACE FUNCTION capture_action() RETURNS trigger AS $body$
+DECLARE
+
+  v_old_data TEXT;
+  v_new_data TEXT;
+BEGIN
+
+  if (TG_OP = 'UPDATE') then
+    v_old_data := ROW(OLD.*);
+    v_new_data := ROW(NEW.*);
+    insert into action_history (schema_name,table_name,user_name,action,original_data,new_data,query,client_ip) 
+    values (TG_TABLE_SCHEMA::TEXT,TG_TABLE_NAME::TEXT,session_user::TEXT,substring(TG_OP,1,1),v_old_data,v_new_data, current_query(),inet_client_addr());
+    RETURN NEW;
+  elsif (TG_OP = 'DELETE') then
+    v_old_data := ROW(OLD.*);
+    insert into action_history (schema_name,table_name,user_name,action,original_data,query,client_ip)
+    values (TG_TABLE_SCHEMA::TEXT,TG_TABLE_NAME::TEXT,session_user::TEXT,substring(TG_OP,1,1),v_old_data, current_query(),inet_client_addr());
+    RETURN OLD;
+  elsif (TG_OP = 'INSERT') then
+    v_new_data := ROW(NEW.*);
+    insert into action_history (schema_name,table_name,user_name,action,new_data,query,client_ip)
+    values (TG_TABLE_SCHEMA::TEXT,TG_TABLE_NAME::TEXT,session_user::TEXT,substring(TG_OP,1,1),v_new_data, current_query(),inet_client_addr());
+    RETURN NEW;
+	elsif (TG_OP = 'TRUNCATE') then
+    v_new_data := ROW(NEW.*);
+    insert into action_history (schema_name,table_name,user_name,action,new_data,query,client_ip)
+    values (TG_TABLE_SCHEMA::TEXT,TG_TABLE_NAME::TEXT,session_user::TEXT,substring(TG_OP,1,1),'TRUNCATE', current_query(),inet_client_addr());
+    RETURN NEW;
+  else
+    RAISE WARNING 'capture_actions() - Other action occurred: %, at %',TG_OP,now();
+    RETURN NULL;
+  end if;
+EXCEPTION
+  WHEN data_exception THEN
+    RAISE WARNING 'capture_action() - UDF ERROR [DATA EXCEPTION] - SQLSTATE: %, SQLERRM: %',SQLSTATE,SQLERRM;
+    RETURN NULL;
+  WHEN unique_violation THEN
+    RAISE WARNING 'capture_action() - UDF ERROR [UNIQUE] - SQLSTATE: %, SQLERRM: %',SQLSTATE,SQLERRM;
+    RETURN NULL;
+  WHEN others THEN
+    RAISE WARNING 'capture_action() - UDF ERROR [OTHER] - SQLSTATE: %, SQLERRM: %',SQLSTATE,SQLERRM;
+    RETURN NULL;
+END;
+$body$
+LANGUAGE plpgsql
+
+--#Attach Function to required table:
+
+
+
+CREATE TRIGGER capture_action_trg 
+ AFTER INSERT OR UPDATE OR DELETE or TRUNCATE ON public.project_departments 
+ EXECUTE PROCEDURE capture_action();
+
+Now Logs can be checked in action_history table.
+
+All Done..!
+
+#postgresql #deletion_audit #triggers #who #deleted #data_deletion #capture_ip
